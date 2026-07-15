@@ -3,13 +3,13 @@ import sys
 import socket
 import json
 import argparse
+import base64
 import struct
 import zlib
 from flask import Flask, jsonify, request, send_from_directory
 from smtc_controller import SMTCController
 from netease_watcher import NeteaseWatcherClient
 from volume_controller import VolumeController
-from security import PinAuth, validate_pin, load_config
 
 def _get_static_folder():
     if getattr(sys, "frozen", False):
@@ -25,36 +25,10 @@ _netease_watcher_port = int(os.environ.get("NETEASE_WATCHER_PORT", "3574"))
 netease_watcher = NeteaseWatcherClient(host=_netease_watcher_host, port=_netease_watcher_port)
 
 volume_ctrl = VolumeController()
-pin_auth = PinAuth()
 
 IS_NETEASE_CLOUD_MUSIC = "cloudmusic"
 
 _ncm_api = None
-
-
-PUBLIC_API_PATHS = {
-    "/api/auth/status",
-    "/api/auth/setup",
-    "/api/auth/login",
-    "/api/auth/change_pin",
-    "/api/auth/reset_pin",
-}
-
-
-@app.before_request
-def require_pin_auth():
-    if request.path in PUBLIC_API_PATHS:
-        return None
-    if not request.path.startswith("/api/"):
-        return None
-    if request.remote_addr in ("127.0.0.1", "::1"):
-        return None
-    if not pin_auth.is_configured():
-        return jsonify({"success": False, "error": "PIN_NOT_CONFIGURED"}), 401
-    token = request.headers.get("X-SMTC-Token") or request.args.get("token")
-    if not pin_auth.validate_token(token):
-        return jsonify({"success": False, "error": "UNAUTHORIZED"}), 401
-    return None
 
 
 def get_ncm_api():
@@ -196,94 +170,6 @@ def icon_192():
 @app.route("/icon-512.png")
 def icon_512():
     return PNG_512, 200, {'Content-Type': 'image/png'}
-
-
-@app.route("/api/auth/status")
-def api_auth_status():
-    return jsonify({
-        "configured": pin_auth.is_configured(),
-        "pin_policy": {
-            "min": 4,
-            "max": 16,
-            "allowed": "letters, numbers, and !@#$%^&*()_-+=[]{}:;,.?/|~",
-        },
-    })
-
-
-@app.route("/api/auth/setup", methods=["POST"])
-def api_auth_setup():
-    if pin_auth.is_configured():
-        return jsonify({"success": False, "error": "PIN_ALREADY_CONFIGURED"}), 409
-    data = request.get_json(silent=True) or {}
-    pin = str(data.get("pin", ""))
-    if not validate_pin(pin):
-        return jsonify({"success": False, "error": "PIN_INVALID"}), 400
-    pin_auth.set_pin(pin)
-    token = pin_auth.login(pin)
-    return jsonify({"success": True, "token": token})
-
-
-@app.route("/api/auth/change_pin", methods=["POST"])
-def api_auth_change_pin():
-    data = request.get_json(silent=True) or {}
-    old_pin = str(data.get("old_pin", ""))
-    new_pin = str(data.get("new_pin", ""))
-    success, error = pin_auth.change_pin(old_pin, new_pin)
-    if not success:
-        return jsonify({"success": False, "error": error}), 400
-    return jsonify({"success": True})
-
-
-@app.route("/api/auth/reset_pin", methods=["POST"])
-def api_auth_reset_pin():
-    if request.remote_addr not in ("127.0.0.1", "::1"):
-        return jsonify({"success": False, "error": "仅限本机操作"}), 403
-    data = request.get_json(silent=True) or {}
-    new_pin = str(data.get("new_pin", ""))
-    success, error = pin_auth.force_set_pin(new_pin)
-    if not success:
-        return jsonify({"success": False, "error": error}), 400
-    return jsonify({"success": True})
-
-
-@app.route("/api/auth/login", methods=["POST"])
-def api_auth_login():
-    data = request.get_json(silent=True) or {}
-    token = pin_auth.login(str(data.get("pin", "")))
-    if not token:
-        return jsonify({"success": False, "error": "PIN_INCORRECT"}), 401
-    return jsonify({"success": True, "token": token})
-
-
-@app.route("/api/health")
-def api_health():
-    ncm = get_ncm_api()
-    cfg = load_config()
-    return jsonify({
-        "ok": True,
-        "version": "1.0.0",
-        "auth_configured": pin_auth.is_configured(),
-        "port": resolve_port(),
-        "smtc": {
-            "available": smtc.available,
-            "source": smtc.get_session_source(),
-        },
-        "netease_watcher": {
-            "available": netease_watcher.available,
-            "base_url": netease_watcher.base_url,
-        },
-        "volume": {
-            "available": volume_ctrl.available,
-        },
-        "ncm_api": {
-            "available": ncm is not None,
-            "logged_in": bool(ncm and ncm.logged_in),
-            "nickname": ncm.nickname if ncm else None,
-        },
-        "config": {
-            "has_pin": bool(cfg.get("pin_hash")),
-        },
-    })
 
 
 @app.route("/api/status", methods=["GET"])
@@ -582,8 +468,14 @@ def get_app_dir():
 
 
 def load_config():
-    from security import load_config as _load_config
-    return _load_config()
+    config_path = os.path.join(get_app_dir(), "config.json")
+    if os.path.exists(config_path):
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {}
 
 
 def resolve_port(cli_port=None):

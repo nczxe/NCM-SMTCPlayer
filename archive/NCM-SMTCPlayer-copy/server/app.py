@@ -2,6 +2,7 @@ import os
 import sys
 import socket
 import json
+import argparse
 from flask import Flask, jsonify, request, send_from_directory, render_template_string
 from smtc_controller import SMTCController
 from netease_watcher import NeteaseWatcherClient
@@ -1099,10 +1100,11 @@ HTML_TEMPLATE = r"""
         async function playNcmSong(songId, songName) {
             switchTab('nowplaying');
 
-            const w = window.open('https://music.163.com/song?id=' + songId, '_blank');
-            setTimeout(() => {
-                try { if (w && !w.closed) w.close(); } catch(e) {}
-            }, 3000);
+            fetch('/api/ncm/open_web', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ song_id: songId })
+            }).catch(() => {});
 
             setTimeout(() => {
                 control('play');
@@ -1623,6 +1625,19 @@ def api_ncm_play():
     return jsonify({"success": success, "error": None if success else "无法启动播放，请确保网易云音乐已打开"})
 
 
+@app.route("/api/ncm/open_web", methods=["POST"])
+def api_ncm_open_web():
+    api = get_ncm_api()
+    if api is None:
+        return jsonify({"success": False, "error": "NCM API 不可用"})
+    data = request.get_json(silent=True) or {}
+    song_id = data.get("song_id")
+    if not song_id:
+        return jsonify({"success": False, "error": "缺少 song_id"})
+    success = api.open_webpage(song_id)
+    return jsonify({"success": success, "error": None if success else "无法打开网页"})
+
+
 @app.route("/api/ncm/play_playlist", methods=["POST"])
 def api_ncm_play_playlist():
     api = get_ncm_api()
@@ -1647,19 +1662,68 @@ def get_local_ip():
         return "127.0.0.1"
 
 
+def get_app_dir():
+    if getattr(sys, "frozen", False):
+        return os.path.dirname(sys.executable)
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+def load_config():
+    config_path = os.path.join(get_app_dir(), "config.json")
+    if os.path.exists(config_path):
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {}
+
+
+def resolve_port(cli_port=None):
+    if cli_port is not None:
+        return int(cli_port)
+    env_port = os.environ.get("SMTC_PORT")
+    if env_port:
+        return int(env_port)
+    cfg = load_config()
+    cfg_port = cfg.get("port")
+    if cfg_port is not None:
+        return int(cfg_port)
+    return 8888
+
+
 if __name__ == "__main__":
     import atexit
     import subprocess as _sp
     import signal as _sig
 
+    parser = argparse.ArgumentParser(description="SMTC Player (Beta)")
+    parser.add_argument("--port", type=int, default=None, help="HTTP 服务端口 (默认: 8888)")
+    parser.add_argument("--save-port", action="store_true", help="将 --port 参数保存到 config.json")
+    args = parser.parse_args()
+
+    port = resolve_port(args.port)
+
+    if args.save_port and args.port:
+        cfg = load_config()
+        cfg["port"] = int(args.port)
+        config_path = os.path.join(get_app_dir(), "config.json")
+        try:
+            with open(config_path, "w", encoding="utf-8") as f:
+                json.dump(cfg, f, ensure_ascii=False, indent=2)
+            print(f"[Config] 端口已保存到 {config_path}")
+        except Exception as e:
+            print(f"[Config] 保存配置失败: {e}")
+
     _watcher_proc = None
 
     def _start_watcher():
         global _watcher_proc
-        watcher_exe = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-            "netease-watcher", "netease-watcher.exe"
-        )
+        app_dir = get_app_dir()
+        watcher_exe = os.path.join(app_dir, "netease-watcher", "netease-watcher.exe")
+        if not os.path.exists(watcher_exe):
+            script_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            watcher_exe = os.path.join(script_dir, "netease-watcher", "netease-watcher.exe")
         if os.path.exists(watcher_exe):
             try:
                 _watcher_proc = _sp.Popen(
@@ -1691,7 +1755,6 @@ if __name__ == "__main__":
     _start_watcher()
 
     local_ip = get_local_ip()
-    port = 8888
 
     print("=" * 60)
     print("  SMTC Player (Beta) - 媒体控制器服务端")

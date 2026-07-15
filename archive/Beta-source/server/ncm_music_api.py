@@ -459,6 +459,35 @@ class NCMApi:
                     continue
         return False
 
+    def open_webpage(self, song_id):
+        url = f"https://music.163.com/song?id={song_id}"
+        try:
+            import webbrowser
+            webbrowser.open(url)
+            print(f"[NCM] Opening webpage: {url}")
+            import threading
+            threading.Thread(target=self._send_ctrl_w, daemon=True).start()
+            return True
+        except Exception as e:
+            print(f"[NCM] Failed to open webpage: {e}")
+            return False
+
+    def _send_ctrl_w(self):
+        import time
+        time.sleep(6)
+        try:
+            import subprocess
+            ps = (
+                '[System.Reflection.Assembly]::LoadWithPartialName("System.Windows.Forms") | Out-Null;'
+                '[System.Windows.Forms.SendKeys]::SendWait("^w")'
+            )
+            subprocess.run(
+                ["powershell", "-WindowStyle", "Hidden", "-Command", ps],
+                timeout=5, capture_output=True,
+            )
+        except Exception as e:
+            print(f"[NCM] Ctrl+W failed: {e}")
+
     def play_playlist(self, playlist_id):
         url_scheme = f"orpheus://playlist/{playlist_id}"
         if sys.platform == "win32":

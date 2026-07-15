@@ -44,25 +44,13 @@ class SMTCController:
         if not self._available:
             return None
         try:
-            sessions = self._run_async(self._get_sessions_async())
+            sessions = asyncio.run(self._get_sessions_async())
             if sessions and len(sessions) > 0:
                 return sessions[0]
             return None
         except Exception as e:
             print(f"[ERROR] 获取会话失败: {e}")
             return None
-
-    def _run_async(self, coro):
-        try:
-            asyncio.get_running_loop()
-        except RuntimeError:
-            return asyncio.run(coro)
-
-        loop = asyncio.new_event_loop()
-        try:
-            return loop.run_until_complete(coro)
-        finally:
-            loop.close()
 
     async def _get_sessions_async(self):
         manager = await self._wmc.GlobalSystemMediaTransportControlsSessionManager.request_async()
@@ -95,7 +83,7 @@ class SMTCController:
                 self._last_status["duration"] = 0
                 return self._last_status
 
-            info = self._run_async(self._get_media_info_async(session))
+            info = asyncio.run(self._get_media_info_async(session))
             timeline = session.get_timeline_properties()
             playback = session.get_playback_info()
 
@@ -156,10 +144,10 @@ class SMTCController:
             if not session:
                 return False
             if hasattr(session, "try_toggle_play_pause_async"):
-                result = self._run_async(session.try_toggle_play_pause_async())
+                session.try_toggle_play_pause_async()
             else:
-                result = self._run_async(session.try_play_pause_toggle_async())
-            return bool(result)
+                session.try_play_pause_toggle_async()
+            return True
         except Exception as e:
             print(f"[ERROR] 播放暂停失败: {e}")
             return False
@@ -171,7 +159,8 @@ class SMTCController:
             session = self._get_session()
             if not session:
                 return False
-            return bool(self._run_async(session.try_play_async()))
+            session.try_play_async()
+            return True
         except Exception as e:
             print(f"[ERROR] 播放失败: {e}")
             return False
@@ -183,7 +172,8 @@ class SMTCController:
             session = self._get_session()
             if not session:
                 return False
-            return bool(self._run_async(session.try_pause_async()))
+            session.try_pause_async()
+            return True
         except Exception as e:
             print(f"[ERROR] 暂停失败: {e}")
             return False
@@ -195,7 +185,8 @@ class SMTCController:
             session = self._get_session()
             if not session:
                 return False
-            return bool(self._run_async(session.try_skip_next_async()))
+            session.try_skip_next_async()
+            return True
         except Exception as e:
             print(f"[ERROR] 下一首失败: {e}")
             return False
@@ -207,7 +198,8 @@ class SMTCController:
             session = self._get_session()
             if not session:
                 return False
-            return bool(self._run_async(session.try_skip_previous_async()))
+            session.try_skip_previous_async()
+            return True
         except Exception as e:
             print(f"[ERROR] 上一首失败: {e}")
             return False
